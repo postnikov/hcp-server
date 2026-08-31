@@ -12,7 +12,28 @@
  * формы SEP-1649 лежат рядом: схема не запрещает лишнего, а часть клиентов читает их.
  */
 
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
+
 const CARD_SCHEMA = 'https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json';
+
+/**
+ * Версии протокола в карточке. Сервер держит две эры на одном эндпоинте, и одним
+ * числом это не выразить — поэтому их два поля, и каждое значит ровно одно:
+ *
+ * - `protocolVersion` — то, чем ответит `initialize`. Это потолок 2025-эры, и он
+ *   берётся у SDK: апгрейд пакета двигает карточку сам, без правки файла.
+ * - `protocolVersions` — обе эры, современная первой. Без него карточка занижала бы
+ *   сервер: `server/discover` отдаёт 2026-07-28, а скаляр о нём умалчивает.
+ *
+ * Скаляр раньше держал 2026-07-28 — и расходился с живым хендшейком (находка Codex
+ * 31.08.2026): агент читал карточку, шёл на `initialize` и получал другую версию.
+ *
+ * Константу современной эры SDK наружу не отдаёт (внутри — `FIRST_MODERN_PROTOCOL_VERSION`),
+ * поэтому она здесь литералом. Сверять при апгрейде SDK не в голове: тест поднимает
+ * сервер, дёргает `initialize` и `server/discover` и сверяет с карточкой.
+ */
+export const MODERN_PROTOCOL_VERSION = '2026-07-28';
+export const HANDSHAKE_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION;
 
 /** `https://example.com/x` → `example.com`. Пусто — значит человек не назвал сайт. */
 export const host = (url) => {
@@ -47,8 +68,9 @@ export function serverCard({ config, readTools }) {
     // Публичный адрес не назван — адреса в карточке нет вовсе: пустой url хуже,
     // чем отсутствующий, потому что агент по нему пойдёт.
     ...(url ? { remotes: [{ type: 'streamable-http', url }], transport: { type: 'streamable-http', endpoint: url } } : {}),
-    // Потолок эры, который сервер реально обслуживает, — см. mcp.js.
-    protocolVersion: '2026-07-28',
+    // Что вернёт `initialize`, и обе эры рядом — см. комментарий к константам выше.
+    protocolVersion: HANDSHAKE_PROTOCOL_VERSION,
+    protocolVersions: [MODERN_PROTOCOL_VERSION, HANDSHAKE_PROTOCOL_VERSION],
     serverInfo: { name: config.server.id, title: config.person.name, version: config.server.version },
     // Ровно то, что объявляет handshake. Обещать resources/prompts, которых нет, — врать.
     capabilities: { tools: {} },

@@ -19,7 +19,7 @@ import { BUDGET_FILE, INBOX_FILE, JOURNAL_FILE, LIMITS, notificationText, useDat
 import { loadConfig, DEFAULTS } from './src/config.js';
 import { loadContext, parseFrontmatter } from './src/context.js';
 import { buildInstructions, buildTools } from './src/mcp.js';
-import { serverCard, llmsTxt, reverseDns } from './src/discovery.js';
+import { serverCard, llmsTxt, reverseDns, MODERN_PROTOCOL_VERSION, HANDSHAKE_PROTOCOL_VERSION } from './src/discovery.js';
 import { createApp } from './src/server.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -725,6 +725,38 @@ test('discovery: llms.txt перечисляет ровно те тулзы, ч�
   assert.ok(!txt.includes('get_services'), 'обещать тулзу, которой нет, нельзя');
   assert.match(txt, /claude mcp add --transport http rin https:\/\/rin\.example\/mcp/);
   assert.equal(txt, llmsTxt({ config: CONFIG, tools: buildTools({ config: CONFIG, context: CONTEXT }) }));
+});
+
+test('discovery: скаляр версии в карточке — ровно то, чем отвечает живой initialize', async () => {
+  // Находка Codex 31.08.2026: карточка обещала 2026-07-28, а хендшейк отдавал 2025-11-25.
+  // Правило переехало из головы в тест: просим версию заведомо новее потолка 2025-эры,
+  // и то, чем сервер ответит, обязано совпасть со скаляром карточки. Апгрейд SDK,
+  // сдвинувший потолок, теперь красит прогон, а не тихо расходится с картой.
+  const { json } = await rpc({
+    jsonrpc: '2.0',
+    id: ++rpcId,
+    method: 'initialize',
+    params: { protocolVersion: MODERN_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'probe', version: '1' } },
+  });
+  const negotiated = json.result.protocolVersion;
+  assert.equal(negotiated, HANDSHAKE_PROTOCOL_VERSION, 'потолок 2025-эры берётся у SDK, а не из литерала');
+
+  const card = await (await fetch(`${base}/.well-known/mcp/server-card.json`)).json();
+  assert.equal(card.protocolVersion, negotiated);
+});
+
+test('discovery: список версий покрывает обе эры, современную первой', async () => {
+  const { json } = await modernRpc('server/discover');
+  const supported = json.result.supportedVersions;
+
+  const card = await (await fetch(`${base}/.well-known/mcp/server-card.json`)).json();
+  // Скаляр один, а эр две — без списка карточка занижала бы сервер.
+  assert.deepEqual(card.protocolVersions, [MODERN_PROTOCOL_VERSION, HANDSHAKE_PROTOCOL_VERSION]);
+  assert.equal(card.protocolVersions[0], supported[0], 'современная эра — первой и ровно та, что у server/discover');
+  for (const version of supported) {
+    assert.ok(card.protocolVersions.includes(version), `${version} обслуживается, но не объявлен`);
+  }
+  assert.ok(card.protocolVersions.includes(card.protocolVersion), 'скаляр обязан быть одной из объявленных версий');
 });
 
 test('discovery: без публичного адреса карточка не зовёт агента в пустоту', async () => {
