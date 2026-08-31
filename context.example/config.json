@@ -1,0 +1,45 @@
+{
+  "person": {
+    "name": "Your Full Name",
+    "short": "Firstname",
+    "headline": "one line an agent can quote: what you do and where",
+    "site": "https://example.com",
+    "pronouns": { "subject": "they", "object": "them", "possessive": "their" }
+  },
+
+  "server": {
+    "id": "yourname",
+    "connectAs": "yourname",
+    "version": "1.0.0",
+    "url": "https://example.com/mcp",
+    "instructions": ""
+  },
+
+  "context": {
+    "groups": {
+      "get_profile": ["who", "now"],
+      "get_speaking": ["speaking"],
+      "get_services": ["services"],
+      "get_channels": ["channels"],
+      "get_writing": ["writing"]
+    }
+  },
+
+  "tools": {},
+
+  "ask": {
+    "enabled": false,
+    "model": "claude-sonnet-5",
+    "maxTokens": 1024,
+    "callsPerDay": 20,
+    "tokensPerDay": 150000
+  },
+
+  "limits": {
+    "callsPerMinute": 60,
+    "askPerDayPerIp": 10,
+    "messagesPerDayPerIp": 5
+  },
+
+  "discovery": { "enabled": true }
+}

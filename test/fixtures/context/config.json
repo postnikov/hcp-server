@@ -1,0 +1,23 @@
+{
+  "person": {
+    "name": "Rin Alvarez",
+    "short": "Rin",
+    "headline": "robotics researcher and workshop host in Porto",
+    "site": "https://rin.example",
+    "pronouns": { "subject": "she", "object": "her", "possessive": "her" }
+  },
+  "server": { "id": "rin", "connectAs": "rin", "version": "2.1.0", "url": "https://rin.example/mcp" },
+  "context": {
+    "groups": {
+      "get_profile": ["who", "now"],
+      "get_speaking": ["speaking"],
+      "get_services": ["services"],
+      "get_channels": ["channels"],
+      "get_writing": ["writing"]
+    }
+  },
+  "tools": { "ask": { "params": { "question": "The question about Rin, in plain text. English or Portuguese." } } },
+  "ask": { "enabled": true, "model": "test-model-5", "maxTokens": 512, "callsPerDay": 4, "tokensPerDay": 9000 },
+  "limits": { "callsPerMinute": 60, "askPerDayPerIp": 3, "messagesPerDayPerIp": 2 },
+  "discovery": { "enabled": true }
+}

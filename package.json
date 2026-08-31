@@ -1,0 +1,16 @@
+{
+  "name": "hcp-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A personal MCP server built to the HCP shape: your context files behind read tools, a message door for other people's agents. Fork it, fill context/, run it.",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
+  }
+}

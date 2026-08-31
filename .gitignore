@@ -1,0 +1,11 @@
+node_modules/
+data/
+
+# Личный слой: файлы человека, его конфиг и его ручки деплоя.
+# Шаблон того же самого лежит в context.example/ и коммитится.
+# Слеш в начале обязателен: без него шаблон прячет и test/fixtures/context/.
+/context/
+.env
+*.log
+.DS_Store
+scratchpad/

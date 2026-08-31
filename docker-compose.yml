@@ -1,0 +1,63 @@
+# Личный MCP-сервер рядом с сайтом, роут по пути /mcp через traefik.
+#
+# Всё личное — домен, имена контейнера и тома, приоритет роутера — приезжает из
+# context/deploy.env: deploy.sh загружает его в окружение перед `docker compose up`.
+# Дефолты ниже рассчитаны на «поднять и посмотреть», а не на прод.
+#
+# priority: у роутера сайта приоритет обычно считается длиной правила (сотня-другая).
+# Со 100 сайт выиграет, и агент получит HTML-404 вместо JSON-RPC — отсюда 1000.
+services:
+  app:
+    build: .
+    container_name: ${MCP_CONTAINER_NAME:-hcp-mcp}
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATA_DIR=/app/data
+      # Публичный адрес: попадает в ответы тулз, в discovery и в шапку уведомления.
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
+      # Ключ консьержа (BYOK). Из .env рядом с этим файлом, в git его нет.
+      # Не задан — тулза ask вежливо отказывает, остальной сервер работает.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ASK_ENABLED=${ASK_ENABLED:-}
+      # Уведомление о входящем письме. Нет канала — уведомление молча пропускается,
+      # письмо всё равно ложится в data/inbox.jsonl.
+      - NOTIFY_TG_BOT_TOKEN=${NOTIFY_TG_BOT_TOKEN:-}
+      - NOTIFY_TG_CHAT_ID=${NOTIFY_TG_CHAT_ID:-}
+      # Прежние имена тех же двух переменных: сервера, поднятые до переименования,
+      # продолжают работать без правки боевого .env.
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN:-}
+      - TG_CHAT_ID=${TG_CHAT_ID:-}
+      - NOTIFY_RESEND_API_KEY=${NOTIFY_RESEND_API_KEY:-}
+      - NOTIFY_EMAIL_TO=${NOTIFY_EMAIL_TO:-}
+      - NOTIFY_EMAIL_FROM=${NOTIFY_EMAIL_FROM:-}
+      - SERVE_DISCOVERY=${SERVE_DISCOVERY:-}
+    volumes:
+      # Журнал вызовов, инбокс и счётчик бюджета. Терять их нельзя: журнал — весь смысл замера.
+      - data:/app/data
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-http.rule=Host(`${MCP_DOMAIN:-localhost}`) && PathPrefix(`/mcp`)"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-http.entrypoints=web"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-http.priority=${MCP_ROUTER_PRIORITY:-1000}"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-http.service=${MCP_ROUTER:-hcpmcp}-backend"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.rule=Host(`${MCP_DOMAIN:-localhost}`) && PathPrefix(`/mcp`)"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.entrypoints=websecure"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.priority=${MCP_ROUTER_PRIORITY:-1000}"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.tls=true"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.tls.certresolver=${MCP_TLS_CERTRESOLVER:-myresolver}"
+      - "traefik.http.routers.${MCP_ROUTER:-hcpmcp}-https.service=${MCP_ROUTER:-hcpmcp}-backend"
+      - "traefik.http.services.${MCP_ROUTER:-hcpmcp}-backend.loadbalancer.server.port=3000"
+
+volumes:
+  data:
+    # Полное имя тома, без префикса проекта: том переживает переименование каталога,
+    # а уже поднятый сервер не теряет журнал при обезличивании compose-файла.
+    name: ${MCP_VOLUME_NAME:-hcp-mcp-data}
+
+networks:
+  traefik-public:
+    external: true

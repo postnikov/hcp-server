@@ -1,0 +1,10 @@
+node_modules
+data
+.git
+scratchpad
+*.log
+# Секреты живут в .env рядом с docker-compose.yml и подаются контейнеру
+# переменными окружения — в образ они попадать не должны.
+.env
+.env.*
+context.example
