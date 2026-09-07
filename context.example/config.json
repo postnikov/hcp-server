@@ -27,6 +27,8 @@
 
   "tools": {},
 
+  "documents": {},
+
   "ask": {
     "enabled": false,
     "model": "claude-sonnet-5",

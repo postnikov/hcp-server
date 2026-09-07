@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { BUDGET_FILE, INBOX_FILE, JOURNAL_FILE, LIMITS, notificationText, useDataDir } from './src/lib.js';
 import { loadConfig, DEFAULTS } from './src/config.js';
 import { loadContext, parseFrontmatter } from './src/context.js';
+import { toolNames } from './src/documents.js';
 import { buildInstructions, buildTools } from './src/mcp.js';
 import { serverCard, llmsTxt, reverseDns, MODERN_PROTOCOL_VERSION, HANDSHAKE_PROTOCOL_VERSION } from './src/discovery.js';
 import { createApp } from './src/server.js';
@@ -27,6 +28,7 @@ const FIXTURES = join(ROOT, 'test', 'fixtures');
 const FULL = join(FIXTURES, 'context');
 const LITE = join(FIXTURES, 'context-lite');
 const EMPTY = join(FIXTURES, 'context-empty');
+const DOCS = join(FIXTURES, 'context-docs');
 const TEST_DATA_DIR = join(tmpdir(), `hcp-mcp-test-${process.pid}`);
 
 const CONFIG = loadConfig({ dir: FULL, env: {} });
@@ -41,7 +43,26 @@ let server;
 let base;
 
 // --- мок исходящих ------------------------------------------------------------
-const outbox = { anthropic: [], telegram: [], resend: [] };
+const outbox = { anthropic: [], telegram: [], resend: [], docs: [] };
+
+/**
+ * Сайт с документами. Живёт отдельно от остальных моков: у него нет тела запроса,
+ * зато есть выключатель — им проверяется поведение сервера, когда источник лёг.
+ */
+const DOC_INDEX = {
+  generated: '2026-09-04T10:00:00.000Z',
+  source: 'https://rin.example/lab#blueprints',
+  documents: [
+    { slug: 'swarm-table', title: 'Blueprint: Swarm Table', tag: 'Blueprint · robots', summary: 'Six table-sized robots that agree without a supervisor.', lang: 'en', url: 'https://docs.example/swarm-table.md', updated: '2026-08-03T21:21:56.000Z' },
+    { slug: 'bench-log', title: 'Blueprint: Bench Log', tag: 'Blueprint · notes', summary: 'Every run logged where the next run can find it.', lang: 'en', url: 'https://docs.example/bench-log.md', updated: '2026-07-11T09:00:00.000Z' },
+  ],
+};
+const DOC_BODIES = {
+  'https://docs.example/swarm-table.md': '# Swarm Table\n\nSix robots, one table, no supervisor.\n',
+  'https://docs.example/bench-log.md': '# Bench Log\n\nWrite the run down or it did not happen.\n',
+};
+/** Источник документов: `true` — отвечает, `false` — сеть лежит. */
+let docsUp = true;
 /** Что мок отвечает следующим вызовом: тест подменяет перед своим сценарием. */
 let anthropicReply = () => ({
   ok: true,
@@ -54,6 +75,15 @@ let telegramReply = () => ({ ok: true, json: async () => ({ ok: true }) });
 let resendReply = () => ({ ok: true, json: async () => ({ id: 'em_1' }) });
 
 const fetchImpl = async (url, init) => {
+  if (String(url).startsWith('https://docs.example/')) {
+    outbox.docs.push(String(url));
+    if (!docsUp) throw new Error('docs.example is down');
+    if (String(url).endsWith('/blueprints.json')) {
+      return { ok: true, json: async () => DOC_INDEX };
+    }
+    const text = DOC_BODIES[String(url)];
+    return text ? { ok: true, text: async () => text } : { ok: false, status: 404, text: async () => '' };
+  }
   const body = JSON.parse(init.body);
   if (String(url).startsWith('https://api.anthropic.com/')) {
     outbox.anthropic.push({ url: String(url), body, headers: init.headers });
@@ -698,6 +728,131 @@ test('общий лимит на IP отбивает JSON-RPC-ошибкой', a
   // Соседний клиент при этом не задет.
   const other = await rpc({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' }, { ip: nextIp() });
   assert.equal(other.res.status, 200);
+});
+
+// --- документы по URL ---------------------------------------------------------
+/** Пауза короче TTL фикстуры не нужна — фикстура держит TTL в 60 мс намеренно. */
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+test('документы: нет секции documents — нет и тулз', async () => {
+  // Основная фикстура documents не объявляет: тот же принцип, что «нет файла — нет тулзы».
+  const { json } = await rpc({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' });
+  const names = json.result.tools.map((t) => t.name);
+  assert.ok(!names.some((n) => n.startsWith('list_') || n.startsWith('get_blueprint')));
+  const got = await tool('list_blueprints');
+  assert.ok(got.isError);
+  assert.match(got.text, /No such tool: list_blueprints/);
+});
+
+test('документы: имена тулз — из конфига, иначе по конвенции', () => {
+  assert.deepEqual(toolNames('blueprints', {}), { list: 'list_blueprints', get: 'get_blueprints' });
+  assert.deepEqual(toolNames('recipes', { get_tool: 'get_recipe' }), { list: 'list_recipes', get: 'get_recipe' });
+});
+
+test('документы: коллекция даёт две тулзы, и внутренняя привязка наружу не едет', async () => {
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const { json } = await rpcTo(at, { jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' });
+    const names = json.result.tools.map((t) => t.name);
+    assert.deepEqual(names, ['get_profile', 'list_blueprints', 'get_blueprint', 'leave_message']);
+    for (const spec of json.result.tools) {
+      assert.equal(spec.documents, undefined, 'привязка к коллекции — деталь реализации');
+      assert.ok(spec.description.length > 100);
+    }
+    // Слаг обязателен и назван в схеме — агенту не надо угадывать.
+    const get = json.result.tools.find((t) => t.name === 'get_blueprint');
+    assert.deepEqual(get.inputSchema.required, ['slug']);
+  });
+});
+
+test('документы: list отдаёт индекс с источника — slug, заголовок, дата', async () => {
+  docsUp = true;
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const got = await toolAt(at, 'list_blueprints');
+    assert.ok(!got.isError, got.text);
+    assert.match(got.text, /2 documents in "blueprints"/);
+    assert.match(got.text, /source: https:\/\/rin\.example\/lab#blueprints/);
+    assert.match(got.text, /`swarm-table` — Blueprint: Swarm Table/);
+    assert.match(got.text, /Six table-sized robots/);
+    assert.match(got.text, /updated 2026-08-03/);
+    // Ответ сам называет соседнюю тулзу — агенту не надо возвращаться в tools/list.
+    assert.match(got.text, /get_blueprint\(\{ slug \}\)/);
+    assert.ok(!got.text.includes('served from cache'));
+  });
+});
+
+test('документы: get отдаёт полный markdown и говорит, откуда он', async () => {
+  docsUp = true;
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const got = await toolAt(at, 'get_blueprint', { slug: 'swarm-table' });
+    assert.ok(!got.isError, got.text);
+    assert.match(got.text, /^Blueprint: Swarm Table — https:\/\/docs\.example\/swarm-table\.md \(updated 2026-08-03\)/);
+    assert.ok(got.text.includes('# Swarm Table'), 'текст документа уходит как есть');
+    assert.ok(got.text.includes('no supervisor.'));
+  });
+});
+
+test('документы: неизвестный slug — отказ со списком существующих', async () => {
+  docsUp = true;
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const got = await toolAt(at, 'get_blueprint', { slug: 'no-such-thing' });
+    assert.ok(got.isError);
+    assert.match(got.text, /No document with slug "no-such-thing"/);
+    assert.match(got.text, /swarm-table, bench-log/);
+  });
+});
+
+test('документы: источник лёг — отдаём кэш и честно помечаем его несвежим', async () => {
+  docsUp = true;
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    assert.ok(!(await toolAt(at, 'list_blueprints')).isError, 'сначала греем кэш');
+    assert.ok(!(await toolAt(at, 'get_blueprint', { slug: 'bench-log' })).isError);
+
+    docsUp = false;
+    await sleep(80); // TTL фикстуры — 60 мс: индекс протух, обновить его не выйдет
+    try {
+      const list = await toolAt(at, 'list_blueprints');
+      assert.ok(!list.isError, 'кэш есть — молчать про документы не за что');
+      assert.match(list.text, /served from cache/);
+      assert.match(list.text, /`bench-log`/, 'содержимое кэша на месте');
+
+      const doc = await toolAt(at, 'get_blueprint', { slug: 'bench-log' });
+      assert.ok(!doc.isError, doc.text);
+      assert.match(doc.text, /may be out of date/);
+      assert.ok(doc.text.includes('# Bench Log'));
+    } finally {
+      docsUp = true;
+    }
+  });
+});
+
+test('документы: источник лёг и кэша нет — честная ошибка, сервер работает дальше', async () => {
+  const config = loadConfig({ dir: DOCS, env: {} });
+  config.documents = { blueprints: { ...config.documents.blueprints, index: 'https://docs.example/missing.json' } };
+  const context = loadContext({ dir: DOCS, groups: config.context.groups });
+  docsUp = false;
+  await withApp({ dir: DOCS, env: {}, config, context }, async (at) => {
+    try {
+      const got = await toolAt(at, 'list_blueprints');
+      assert.ok(got.isError);
+      assert.match(got.text, /Could not read the "blueprints" index/);
+      assert.match(got.text, /nothing is cached yet/);
+      // Остальной сервер при этом жив — сеть не обязательна для файловых тулз.
+      assert.ok(!(await toolAt(at, 'get_profile')).isError);
+    } finally {
+      docsUp = true;
+    }
+  });
+});
+
+test('документы: instructions и llms.txt называют новые тулзы', async () => {
+  docsUp = true;
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const { json } = await rpcTo(at, HELLO);
+    assert.match(json.result.instructions, /list_blueprints, get_blueprint/);
+    const txt = await (await fetch(`${at}/llms.txt`)).text();
+    assert.ok(txt.includes('`list_blueprints`'));
+    assert.ok(txt.includes('`get_blueprint`'));
+  });
 });
 
 // --- discovery ----------------------------------------------------------------

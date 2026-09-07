@@ -12,6 +12,7 @@ import { mountMcp } from './mcp.js';
 import { mountDiscovery } from './discovery.js';
 import { loadConfig, contextDir, secrets as loadSecrets } from './config.js';
 import { loadContext } from './context.js';
+import { createDocuments } from './documents.js';
 import { DATA_DIR } from './lib.js';
 
 const MINUTE = 60_000;
@@ -36,6 +37,10 @@ export function createApp({ fetchImpl = fetch, dir = contextDir(), env = process
   config ??= loadConfig({ dir, env });
   context ??= loadContext({ dir, groups: config.context.groups });
   const secrets = loadSecrets(env);
+  // Документы по URL. Прогрев не блокирует старт и не роняет процесс: сеть — единственная
+  // часть сервера, которой может не быть, и её отсутствие не повод не подняться.
+  const documents = createDocuments({ config, fetchImpl });
+  documents.prime().catch(() => {});
 
   const app = express();
   app.disable('x-powered-by');
@@ -64,7 +69,7 @@ export function createApp({ fetchImpl = fetch, dir = contextDir(), env = process
   // Тело MCP-запроса небольшое: письмо ≤2000 символов, вопрос — строка.
   const json = express.json({ limit: '64kb' });
 
-  const mounted = mountMcp(app, { clientIp, limited, json, fetchImpl, config, context, secrets });
+  const mounted = mountMcp(app, { clientIp, limited, json, fetchImpl, config, context, secrets, documents });
 
   if (config.discovery.enabled) {
     mountDiscovery(app, { config, tools: mounted.tools, readTools: mounted.readTools });
@@ -79,7 +84,7 @@ export function createApp({ fetchImpl = fetch, dir = contextDir(), env = process
       ),
   );
 
-  app.locals.mcp = { config, context, ...mounted };
+  app.locals.mcp = { config, context, documents, ...mounted };
   return app;
 }
 

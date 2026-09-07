@@ -55,6 +55,11 @@ an eighth. The names don't matter much; the split into three tiers does.
 | **`ask`** | one API call · hard daily cap | For the question your files don't answer head-on. A model answers strictly from the same files, under a daily ceiling so an experiment can't become a bill. **Off by default**: the only tool that costs money |
 | **`leave_message`** | the one write · human in the loop | A note lands in `data/inbox.jsonl` and pushes to your phone. Nothing is published, nothing is auto-answered, and the reply comes from you or not at all |
 
+The read tier has two sources, not one: files in your `context/`, and documents
+you already publish elsewhere, fetched by URL and cached (see below). Both are
+free and instant and keep a model out of the path — a tier is defined by what it
+costs you, not by where the bytes sit.
+
 Access is uniform — every tier is open to every agent, with no key and no
 account. What separates the tiers is what each one costs you and how far it
 reaches: reading is free and touches nothing, `ask` spends your money against a
@@ -116,6 +121,36 @@ of an invented one.
 Everything the server says about you comes out of `context/`: there is not one
 personal word in `src/`. A test checks that, so it's a fact and not a promise.
 
+## Documents you publish elsewhere
+
+Not everything worth handing to an agent belongs in `context/`. A blueprint, a
+playbook, a spec you already publish on your own site has one home, and copying it
+here would just start a second copy that falls behind on the same day.
+
+Point the server at the index instead:
+
+```json
+"documents": {
+  "blueprints": {
+    "index": "https://example.com/downloads/blueprints.json",
+    "ttlMinutes": 60,
+    "list_tool": "list_blueprints",
+    "get_tool": "get_blueprint"
+  }
+}
+```
+
+Each collection adds two tools — `list_blueprints` returns the index (slug, title,
+one-line summary, when it last changed) and `get_blueprint({slug})` returns the full
+Markdown, exactly as published. No `documents` section, no tools: the same rule as
+files. The manifest is `{"documents": [{slug, title, summary, url, updated}]}`, and
+only `slug` and `url` are required.
+
+The index and the texts are cached for `ttlMinutes`. If the source is unreachable the
+agent gets the last copy with an explicit note that it may be stale; if nothing is
+cached yet it gets an honest error naming the source, not an empty list. Details in
+`context.example/_config.md`.
+
 ## config.json
 
 The file is optional — without it the server still runs, it just talks about
@@ -127,6 +162,7 @@ The file is optional — without it the server still runs, it just talks about
 | `server` | `id` (the name in the handshake), `connectAs` (the name in `claude mcp add`), `url` (your public `/mcp`), `instructions` (what an agent reads before its first call; empty = assembled from your `person` and the tools that actually exist) |
 | `context.groups` | the file → tool map, and the order tools appear in `tools/list`. A file not named here still ships, as `get_<filename>` |
 | `tools` | overrides the descriptions of `ask` and `leave_message`. File tools are described by `for_agent` in their own header, next to the content they describe |
+| `documents` | collections fetched by URL — each one adds a list tool and a get-by-slug tool. Empty by default, so no tools |
 | `ask` | `enabled`, `model`, `maxTokens`, and the two daily ceilings |
 | `limits` | per-IP buckets: calls per minute, `ask` and `leave_message` per day |
 | `discovery` | whether this process serves its own `/llms.txt` and server card |

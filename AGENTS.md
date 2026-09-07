@@ -51,8 +51,9 @@ src/context.js    the owner's files → sections and the tool list
 src/mcp.js        the protocol: tool assembly, schemas, journal, mounting /mcp
 src/lib.js        state on disk, budget cap, validation, Anthropic + notifications
 src/discovery.js  server-card.json and llms.txt built from the config
+src/documents.js  documents fetched by URL: index and body cache, TTL, honest stale
 src/server.js     express, client IP behind a proxy, rate-limit buckets, startup
-test.js           node:test over test/fixtures/ — 50 tests, all network mocked
+test.js           node:test over test/fixtures/ — 59 tests, all network mocked
 data/             journal.jsonl, inbox.jsonl, budget.json (not in git)
 ```
 
@@ -70,6 +71,13 @@ header overrides it.
 
 `ask` is declared only when `ask.enabled` (off in the template — it is the only
 tool that costs money). `leave_message` is always declared.
+
+The same rule covers documents the owner publishes elsewhere. A `documents`
+section in `config.json` names a collection and the URL of its index, and the
+server declares two more tools for it — the list and the full Markdown by slug.
+No section, no tools. The point is to avoid a second copy: the text stays where
+its author publishes it, and the server reads it over HTTP on a TTL. See
+`context.example/_config.md` for the manifest shape.
 
 Descriptions of file tools come from `for_agent` in each file's own header;
 descriptions of `ask` and `leave_message` come from `config.json → tools`. The
@@ -137,7 +145,13 @@ the code does not roll back the context.
 ## Traps
 
 - **Context is read at process start.** Editing `context/*.md` without a restart
-  changes nothing.
+  changes nothing. Documents behave the opposite way: they live on a TTL, so a
+  change at the source arrives on its own.
+- **The network is the one part of this server that can be absent.** The warm-up
+  at boot neither blocks startup nor crashes the process; an unreachable source
+  serves the last cache with an explicit note that it may be stale, and an empty
+  cache returns an error naming the source. Do not "simplify" any of that into an
+  empty list — an empty list is a lie an agent cannot detect.
 - **`.env` is edited on the host, not here.** With no `ANTHROPIC_API_KEY`, `ask`
   refuses politely; with no notification channel, the push is skipped silently
   and the message still lands in `data/inbox.jsonl`. The legacy `TG_BOT_TOKEN` /

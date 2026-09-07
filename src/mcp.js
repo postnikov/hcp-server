@@ -24,6 +24,7 @@
 import { createMcpHandler, Server } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { LIMITS, MSG_TYPES, ask, journal, notify, saveMessage, validateMessage } from './lib.js';
+import { toolNames } from './documents.js';
 
 /** Ответ тулзы — всегда плейн-текст: markdown контекста агент читает как есть. */
 const text = (body, isError = false) => ({ content: [{ type: 'text', text: body }], isError });
@@ -34,7 +35,7 @@ const capitalize = (word) => word.charAt(0).toUpperCase() + word.slice(1);
  * Инструкции сервера: авторские из конфига, иначе собранные из того, что реально объявлено.
  * Сгенерированные не притворяются написанными человеком — они перечисляют факты.
  */
-export function buildInstructions({ config, readTools, hasAsk }) {
+export function buildInstructions({ config, readTools, hasAsk, docTools = [] }) {
   if (config.server.instructions) return config.server.instructions;
 
   const { name, headline, site } = config.person;
@@ -52,6 +53,11 @@ export function buildInstructions({ config, readTools, hasAsk }) {
       ? `Two tools do more than read. ask() answers a question that the files do not answer directly, synthesised strictly from the same pack. leave_message() delivers a message to the human — an invitation, a project, an introduction from your human.`
       : `One tool does more than read: leave_message() delivers a message to the human — an invitation, a project, an introduction from your human. Nothing is published and nothing is auto-answered.`,
   );
+  if (docTools?.length) {
+    lines.push(
+      `Documents ${name || 'the owner'} publishes elsewhere are readable here too, live from the source: ${docTools.join(', ')}.`,
+    );
+  }
   lines.push('Prices and rates are deliberately not published here. Ask for them through leave_message.');
   return lines.join('\n\n');
 }
@@ -59,6 +65,16 @@ export function buildInstructions({ config, readTools, hasAsk }) {
 /** Описание `ask` по умолчанию. Человек переопределяет его в `context/config.json`. */
 const askDescription = ({ short, readTools }) =>
   `Ask a question about ${short} and get a synthesised answer. Use this only for questions the files do not answer directly. Anything you can simply read is cheaper and faster through ${readTools.join(', ') || 'the file tools'}. The answer is built strictly from the same context pack those tools return: nothing else is available to it, and questions it cannot answer come back as "I do not know — ask the human". Rate-limited, and capped by a daily budget; when the budget is spent the file tools still work.`;
+
+/**
+ * Описания тулз документов по умолчанию. Как и у остальных, переопределяются в
+ * `context/config.json → tools`: что это за коллекция, знает человек, а не код.
+ */
+const listDocsDescription = ({ short, collection, getTool }) =>
+  `List the documents ${short} publishes in the "${collection}" collection — for each one a slug, a title, a one-line summary and when it last changed. This is the index ${short} maintains at the source, read live rather than copied here, so it never lags behind what is actually published. Free and instant. Call ${getTool} with a slug when you want the full text.`;
+
+const getDocsDescription = ({ short, collection, listTool }) =>
+  `Return one document from ${short}'s "${collection}" collection in full, as Markdown, exactly as published at the source. Use ${listTool} first if you do not know the slug — an unknown slug comes back with the list of valid ones. Free and instant; the text is cached, and if the source is briefly unreachable you get the last copy with a note that it may be stale.`;
 
 /** Описание `leave_message` по умолчанию. Тоже переопределяется в конфиге. */
 const messageDescription = ({ short }) =>
@@ -106,6 +122,31 @@ export function buildTools({ config, context }) {
         required: ['question'],
         additionalProperties: false,
       }),
+    });
+  }
+
+  // Документы: по две тулзы на коллекцию, и только если коллекция объявлена в конфиге.
+  for (const [collection, spec] of Object.entries(config.documents || {})) {
+    if (!spec?.index) continue;
+    const { list, get } = toolNames(collection, spec);
+    tools.push({
+      name: list,
+      description: describe(list, listDocsDescription({ short, collection, getTool: get })),
+      inputSchema: withParams(list, { type: 'object', properties: {}, additionalProperties: false }),
+      documents: { collection, mode: 'list' },
+    });
+    tools.push({
+      name: get,
+      description: describe(get, getDocsDescription({ short, collection, listTool: list })),
+      inputSchema: withParams(get, {
+        type: 'object',
+        properties: {
+          slug: { type: 'string', description: `Which document to return. The slugs come from ${list}.` },
+        },
+        required: ['slug'],
+        additionalProperties: false,
+      }),
+      documents: { collection, mode: 'get' },
     });
   }
 
@@ -222,13 +263,75 @@ const IMPL = {
   },
 };
 
+/** Дата в списке — без времени: агенту важно «когда меняли», а не в какую секунду. */
+const day = (iso) => (iso ? String(iso).slice(0, 10) : '');
+
+/**
+ * Ответы тулз документов. Кэш и сеть живут в documents.js — здесь только то,
+ * что увидит агент, и честная пометка, когда отдаём несвежее.
+ */
+const DOCS_IMPL = {
+  list: async (ctx, collection) => {
+    const result = await ctx.documents.list(collection);
+    if (!result.ok) {
+      return text(
+        `Could not read the "${collection}" index at ${result.index}${result.error ? ` (${result.error})` : ''}, and nothing is cached yet. This is a network problem on this server, not a missing document — try again in a minute.`,
+        true,
+      );
+    }
+    const head = [
+      `${result.documents.length} document${result.documents.length === 1 ? '' : 's'} in "${collection}" · source: ${result.source}`,
+      result.generated ? `index generated ${result.generated}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    const body = result.documents
+      .map((doc) =>
+        [
+          `- \`${doc.slug}\` — ${doc.title}`,
+          doc.summary ? `  ${doc.summary}` : '',
+          `  ${[doc.tag, doc.updated ? `updated ${day(doc.updated)}` : '', doc.url].filter(Boolean).join(' · ')}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      )
+      .join('\n\n');
+
+    const stale = result.stale
+      ? `Note: served from cache — the index could not be refreshed just now (last read ${result.fetchedAt}). The list may be out of date.\n\n`
+      : '';
+    return text(`${stale}${head}\n\n${body}\n\nCall ${ctx.docTool(collection, 'get')}({ slug }) for the full text.`);
+  },
+
+  get: async (ctx, collection, args) => {
+    const slug = String(args.slug ?? '').trim();
+    if (!slug) return text(`slug is required: which document to return. ${ctx.docTool(collection, 'list')} lists them.`, true);
+
+    const result = await ctx.documents.get(collection, slug);
+    if (result.unknownSlug) {
+      return text(`No document with slug "${slug}" in "${collection}". Available: ${result.slugs.join(', ')}.`, true);
+    }
+    if (!result.ok) {
+      return text(
+        `Could not fetch "${slug}"${result.url ? ` from ${result.url}` : ''}${result.error ? ` (${result.error})` : ''}. This is a network problem on this server — the document itself is published and readable at the source.`,
+        true,
+      );
+    }
+    const stale = result.stale ? 'Note: served from cache and may be out of date — the source could not be reached just now.\n\n' : '';
+    const head = `${result.doc.title} — ${result.doc.url}${result.doc.updated ? ` (updated ${day(result.doc.updated)})` : ''}`;
+    return text(`${stale}${head}\n\n${result.text}`);
+  },
+};
+
 /** Сервер на один запрос: состояния между вызовами у нас нет, держать сессию нечем. */
 function buildServer(ctx) {
   const server = new Server(ctx.serverInfo, { capabilities: { tools: {} }, instructions: ctx.instructions });
 
   server.setRequestHandler('tools/list', () => ({
-    // Внутреннее поле slugs наружу не едет: это деталь склейки файлов, а не часть протокола.
-    tools: ctx.tools.map(({ slugs, ...spec }) => spec),
+    // Внутренние поля наружу не едут: и склейка файлов, и привязка к коллекции документов —
+    // детали реализации, а не часть протокола.
+    tools: ctx.tools.map(({ slugs, documents, ...spec }) => spec),
   }));
 
   server.setRequestHandler('tools/call', async (request) => {
@@ -240,6 +343,7 @@ function buildServer(ctx) {
     if (bad) return text(bad, true);
 
     if (spec.slugs) return text(ctx.context.render(spec.slugs));
+    if (spec.documents) return DOCS_IMPL[spec.documents.mode](ctx, spec.documents.collection, args);
     return IMPL[name](ctx, args);
   });
 
@@ -251,10 +355,13 @@ function buildServer(ctx) {
  * @param deps — {clientIp, limited, json, fetchImpl, config, context, secrets} из server.js:
  *   этот модуль не знает ни про ведёрки rate-limit, ни про мидлвары express.
  */
-export function mountMcp(app, { clientIp, limited, json, fetchImpl, config, context, secrets }) {
+export function mountMcp(app, { clientIp, limited, json, fetchImpl, config, context, secrets, documents }) {
   const tools = buildTools({ config, context });
   const readTools = tools.filter((tool) => tool.slugs).map((tool) => tool.name);
-  const instructions = buildInstructions({ config, readTools, hasAsk: config.ask.enabled });
+  const docTools = tools.filter((tool) => tool.documents).map((tool) => tool.name);
+  const instructions = buildInstructions({ config, readTools, hasAsk: config.ask.enabled, docTools });
+  /** Имя соседней тулзы коллекции: ответы ссылаются друг на друга, а имена — из конфига. */
+  const docTool = (collection, mode) => toolNames(collection, config.documents?.[collection] || {})[mode];
   const serverInfo = { name: config.server.id, version: config.server.version };
 
   const rpcError = (res, status, code, message) =>
@@ -296,6 +403,8 @@ export function mountMcp(app, { clientIp, limited, json, fetchImpl, config, cont
       config,
       context,
       secrets,
+      documents,
+      docTool,
       tools,
       readTools,
       instructions,
@@ -321,5 +430,5 @@ export function mountMcp(app, { clientIp, limited, json, fetchImpl, config, cont
     rpcError(res, 400, -32700, `Could not parse the request body: ${err.type || 'bad request'}.`),
   );
 
-  return { tools, readTools, instructions };
+  return { tools, readTools, docTools, instructions };
 }
