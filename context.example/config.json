@@ -31,7 +31,7 @@
 
   "ask": {
     "enabled": false,
-    "model": "claude-sonnet-5",
+    "model": "claude-sonnet-5-5",
     "maxTokens": 1024,
     "callsPerDay": 20,
     "tokensPerDay": 150000

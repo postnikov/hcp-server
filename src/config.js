@@ -81,8 +81,12 @@ export const DEFAULTS = {
   ask: {
     // В шаблоне выключено намеренно: `ask` — единственная тулза, которая стоит денег.
     enabled: false,
-    model: 'claude-sonnet-5',
+    model: 'claude-sonnet-5-5',
     maxTokens: 1024,
+    // Без мышления до ответа: при max_tokens ≈1k адаптивное мышление съело бы весь ответ,
+    // а консьерж пересказывает готовый контекст. Sonnet 5.5 отвечает 400 на `disabled` —
+    // тот же режим у него зовётся `between_tools`; другая модель — другое значение здесь.
+    thinking: { type: 'between_tools' },
     callsPerDay: 20,
     tokensPerDay: 150_000,
   },
