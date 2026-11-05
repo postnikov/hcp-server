@@ -12,6 +12,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,9 +179,16 @@ const toolAt = async (target, name, args = {}, opts) => {
 };
 const tool = (name, args, opts) => toolAt(base, name, args, opts);
 
+/**
+ * Только loopback, тот же адрес, по которому ходит клиент. На macOS `listen(0)` без адреса
+ * садится на `*:порт` и не видит соседа, который держит `127.0.0.1:порт`: запрос уходит ему,
+ * а тест падает с чужим ответом. Так падали прогоны, пока на Mac слушал любой локальный сервис.
+ */
+const listenLocal = (app, port = 0) => app.listen(port, '127.0.0.1');
+
 /** Поднять второй сервер на другой конфигурации и погасить его после сценария. */
 const withApp = async (options, body) => {
-  const app = createApp({ fetchImpl, dir: FULL, ...options }).listen(0);
+  const app = listenLocal(createApp({ fetchImpl, dir: FULL, ...options }));
   await new Promise((done) => app.once('listening', done));
   try {
     return await body(`http://127.0.0.1:${app.address().port}`);
@@ -204,7 +212,7 @@ const resetBudget = () => rmSync(BUDGET_FILE(), { force: true });
 
 before(async () => {
   useDataDir(TEST_DATA_DIR);
-  server = createApp({ fetchImpl, dir: FULL, env: ENV }).listen(0);
+  server = listenLocal(createApp({ fetchImpl, dir: FULL, env: ENV }));
   await new Promise((done) => server.once('listening', done));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -212,6 +220,22 @@ before(async () => {
 after(() => {
   server?.close();
   rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+});
+
+// --- стенд: тест разговаривает со своим сервером -------------------------------
+test('стенд: порт занят чужим сервисом на loopback — тестовый сервер не делит его молча', async () => {
+  const squatter = createHttpServer((_req, res) => res.writeHead(404).end()).listen(0, '127.0.0.1');
+  await new Promise((done) => squatter.once('listening', done));
+  try {
+    const app = listenLocal(createApp({ fetchImpl, dir: FULL, env: ENV }), squatter.address().port);
+    const code = await new Promise((done) => {
+      app.once('error', (e) => done(e.code));
+      app.once('listening', () => app.close(() => done('bound')));
+    });
+    assert.equal(code, 'EADDRINUSE');
+  } finally {
+    squatter.close();
+  }
 });
 
 // --- контекст: состав сервера определяют файлы --------------------------------
