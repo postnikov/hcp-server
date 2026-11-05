@@ -53,7 +53,7 @@ src/lib.js        state on disk, budget cap, validation, Anthropic + notificatio
 src/discovery.js  server-card.json and llms.txt built from the config
 src/documents.js  documents fetched by URL: index and body cache, TTL, honest stale
 src/server.js     express, client IP behind a proxy, rate-limit buckets, startup
-test.js           node:test over test/fixtures/ — 59 tests, all network mocked
+test.js           node:test over test/fixtures/ — 63 tests, all network mocked
 data/             journal.jsonl, inbox.jsonl, budget.json (not in git)
 ```
 
@@ -83,6 +83,19 @@ Descriptions of file tools come from `for_agent` in each file's own header;
 descriptions of `ask` and `leave_message` come from `config.json → tools`. The
 description lives next to the content it describes, so the two cannot drift.
 
+Every tool also declares a `title` and `annotations` (`HINTS` in `src/mcp.js`). The
+hints are honest about what the tool does: files and documents read (documents are
+open world), `ask` does not read (it spends budget and answers differently each
+time), `leave_message` does not read and is open world. Without them a client must
+by spec assume a destructive write. `tools.<name>.title` and
+`tools.<name>.annotations` in the config override them, hint by hint.
+
+**A message reaches a real person, so its human sees it first.** The default
+description of `leave_message` and the assembled `instructions` tell an agent to show
+its human the final text and contact, send only after they agree, never invent a
+contact and not repeat after a success. An owner's own text replaces that wording on
+purpose; the code does not append to it.
+
 ## Two protocol eras on one endpoint
 
 `createMcpHandler` serves both, from one `buildServer(ctx)` factory:
@@ -104,10 +117,17 @@ the only literal, because the SDK does not export it. Four tests cover this —
 they boot the server and diff the card against a live `initialize` and
 `server/discover`. Don't replace them with a hand-check.
 
+**GET `/mcp`.** A plain GET (a browser, an agent's web fetch of a link from a chat)
+gets a 302 to `server.page`. Anything that looks like an MCP client keeps the 405:
+`Accept: text/event-stream` or any of `MCP-Protocol-Version`, `Mcp-Session-Id`,
+`Mcp-Method`, `Last-Event-ID`. The header list matters: Codex opens with a GET that
+has `Accept: */*` and `MCP-Protocol-Version`, so filtering on `Accept` alone would
+redirect a real client. An empty `page` means 405 for everyone.
+
 ## Run and verify
 
 ```bash
-npm test                                          # 50 tests, network mocked
+npm test                                          # 63 tests, network mocked
 PORT=3999 DATA_DIR=/tmp/mcp node src/server.js    # local server on context/
 CONTEXT_DIR=test/fixtures/context-lite node src/server.js   # lite: one file
 ```

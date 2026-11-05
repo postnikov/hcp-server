@@ -42,6 +42,9 @@ export const DEFAULTS = {
     url: '',
     // Пусто — instructions собираются из person + состава тулз (см. mcp.js).
     instructions: '',
+    // Страница о сервере для людей и веб-фетча агентов: обычный GET /mcp уходит туда 302.
+    // Пусто — GET /mcp отвечает 405, как любой POST-only сервер.
+    page: '',
   },
   context: {
     /**
