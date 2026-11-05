@@ -78,9 +78,10 @@ ssh "$DEPLOY_SERVER" "test -s $DEPLOY_DIR/.env" || {
 echo "→ Пересборка контейнера..."
 ssh "$DEPLOY_SERVER" "cd $DEPLOY_DIR && set -a && . ./context/deploy.env && set +a && docker compose up -d --build"
 
+# Своя проба подписана: в журнале сервера её видно по User-Agent и можно отсечь.
 echo "→ Смоук..."
 for i in $(seq 1 15); do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -A 'mcp-smoke/deploy.sh' \
     -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$MCP_PUBLIC_URL" || echo 000)
   [ "$CODE" = "200" ] && { echo "✓ $MCP_PUBLIC_URL → 200"; exit 0; }
