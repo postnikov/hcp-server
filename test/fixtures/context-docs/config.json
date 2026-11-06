@@ -1,0 +1,20 @@
+{
+  "person": {
+    "name": "Rin Alvarez",
+    "short": "Rin",
+    "headline": "robotics researcher and workshop host in Porto",
+    "site": "https://rin.example",
+    "pronouns": { "subject": "she", "object": "her", "possessive": "her" }
+  },
+  "server": { "id": "rin-docs", "version": "1.0.0", "url": "https://rin.example/mcp" },
+  "ask": { "enabled": false },
+  "documents": {
+    "blueprints": {
+      "index": "https://docs.example/blueprints.json",
+      "ttlMinutes": 0.001,
+      "list_tool": "list_blueprints",
+      "get_tool": "get_blueprint"
+    }
+  },
+  "discovery": { "enabled": true }
+}

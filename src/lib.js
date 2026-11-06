@@ -155,9 +155,8 @@ export async function ask(question, { config, context, readTools = [], fetchImpl
       body: JSON.stringify({
         model: config.ask.model,
         max_tokens: config.ask.maxTokens,
-        // Мышление выключено намеренно: при max_tokens ≈1k адаптивное мышление съело бы
-        // весь ответ, а консьерж пересказывает готовый контекст — думать тут не над чем.
-        thinking: { type: 'disabled' },
+        // Мышление до ответа выключено — почему и чем, см. config.ask.thinking.
+        thinking: config.ask.thinking,
         system: askSystemPrompt({
           person: config.person,
           url: String(config.server.url).replace(/^https?:\/\//, ''),
