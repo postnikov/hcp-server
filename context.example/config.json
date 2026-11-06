@@ -12,7 +12,8 @@
     "connectAs": "yourname",
     "version": "1.0.0",
     "url": "https://example.com/mcp",
-    "instructions": ""
+    "instructions": "",
+    "page": ""
   },
 
   "context": {

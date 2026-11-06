@@ -382,6 +382,107 @@ test('tools/list: состав из контекста, у каждой тулз
   assert.match(ask.inputSchema.properties.question.description, /Portuguese/);
 });
 
+/**
+ * Подсказки клиенту (MCP tool annotations). Без них клиент по спеке считает каждую тулзу
+ * разрушительной записью и спрашивает подтверждение даже на get_profile.
+ */
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+test('tools/list: у каждой тулзы title и честные annotations — в обеих эрах', async () => {
+  for (const list of [
+    (await rpc({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' })).json.result.tools,
+    (await modernRpc('tools/list')).json.result.tools,
+  ]) {
+    const by = Object.fromEntries(list.map((t) => [t.name, t]));
+    for (const spec of list) {
+      assert.ok(spec.title?.length > 2, `${spec.name}: нужен title`);
+      for (const hint of Object.keys(READ_ONLY)) assert.equal(typeof spec.annotations?.[hint], 'boolean', `${spec.name}: ${hint}`);
+    }
+    // Файловые — чтение замкнутого пака; title — из шапки файла, а не из кода.
+    for (const name of READ_TOOLS) assert.deepEqual(by[name].annotations, READ_ONLY, name);
+    assert.equal(by.get_reading.title, 'Reading list');
+    // ask тратит дневной бюджет и отвечает каждый раз по-разному, но ничего не стирает.
+    assert.deepEqual(by.ask.annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
+    // Письмо уходит живому человеку: не чтение, не идемпотентно (повтор — второе письмо), открытый мир.
+    assert.deepEqual(by.leave_message.annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    assert.match(by.ask.title, /Rin/);
+    assert.match(by.leave_message.title, /Rin/);
+  }
+});
+
+test('tools/list: документы — чтение с чужого источника, title и annotations переопределяются конфигом', async () => {
+  await withApp({ dir: DOCS, env: {} }, async (at) => {
+    const tools = (await rpcTo(at, { jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' })).json.result.tools;
+    const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+    assert.deepEqual(by.list_blueprints.annotations, { ...READ_ONLY, openWorldHint: true });
+    assert.deepEqual(by.get_blueprint.annotations, { ...READ_ONLY, openWorldHint: true });
+    assert.match(by.list_blueprints.title, /blueprints/);
+  });
+  const config = {
+    ...CONFIG,
+    tools: { ...CONFIG.tools, get_profile: { title: 'About Rin' }, ask: { annotations: { openWorldHint: true } } },
+  };
+  const tools = buildTools({ config, context: CONTEXT });
+  const profile = tools.find((t) => t.name === 'get_profile');
+  assert.equal(profile.title, 'About Rin');
+  assert.deepEqual(profile.annotations, READ_ONLY, 'title переопределён, подсказки — свои');
+  // Переопределяется одна подсказка, остальные остаются честными по умолчанию.
+  assert.deepEqual(tools.find((t) => t.name === 'ask').annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+});
+
+test('GET /mcp: браузер и веб-фетч — 302 на страницу сервера, MCP-клиент — прежний 405', async () => {
+  const get = (target, headers = {}) => fetch(`${target}/mcp`, { redirect: 'manual', headers: { 'user-agent': 'test-agent/1.0', ...headers } });
+  for (const accept of ['text/html,application/xhtml+xml,*/*;q=0.8', '*/*', undefined]) {
+    const res = await get(base, accept ? { accept } : {});
+    assert.equal(res.status, 302, `Accept: ${accept}`);
+    assert.equal(res.headers.get('location'), CONFIG.server.page);
+  }
+  // Всё, что похоже на MCP-клиент, получает то же, что и раньше: поток не поддерживаем — 405.
+  for (const headers of [
+    { accept: 'text/event-stream' },
+    { accept: 'application/json, text/event-stream' },
+    { accept: '*/*', 'mcp-protocol-version': '2025-06-18' },
+    { accept: '*/*', 'mcp-session-id': 'abc' },
+    { accept: '*/*', 'mcp-method': 'tools/list' },
+    { 'last-event-id': '7' },
+  ]) {
+    const res = await get(base, headers);
+    assert.equal(res.status, 405, JSON.stringify(headers));
+    assert.equal(res.headers.get('allow'), 'POST');
+    assert.equal((await res.json()).error.code, -32000);
+  }
+  // DELETE не трогаем.
+  assert.equal((await fetch(`${base}/mcp`, { method: 'DELETE' })).status, 405);
+  // Страница не задана (форкер без сайта) — прежний 405 и браузеру.
+  await withApp({ dir: LITE, env: {} }, async (at) => {
+    assert.equal((await get(at, { accept: 'text/html' })).status, 405);
+  });
+});
+
+/**
+ * Письмо уходит живому человеку от чужого имени. Форкер без своих текстов получает правило
+ * из дефолтов кода: `context.example/config.json` описаний не задаёт.
+ */
+const SEND_RULES = [/show your human the final/i, /only after they agree/i, /never invent a contact/i, /do not send it again/i];
+
+test('правило письма: человек видит текст до отправки — в дефолтах leave_message и instructions', async () => {
+  const description = buildTools({ config: CONFIG, context: CONTEXT }).find((t) => t.name === 'leave_message').description;
+  const askOff = { ...CONFIG, ask: { ...CONFIG.ask, enabled: false } };
+  for (const rule of SEND_RULES) {
+    assert.match(description, rule, 'описание leave_message');
+    assert.match(buildInstructions({ config: CONFIG, readTools: READ_TOOLS, hasAsk: true }), rule, 'instructions с ask');
+    assert.match(buildInstructions({ config: askOff, readTools: READ_TOOLS, hasAsk: false }), rule, 'instructions без ask');
+  }
+  // То же доходит до живого клиента в обеих эрах.
+  const { json } = await rpc({ jsonrpc: '2.0', id: ++rpcId, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+  assert.match(json.result.instructions, SEND_RULES[0]);
+  const modern = (await modernRpc('tools/list')).json.result.tools.find((t) => t.name === 'leave_message');
+  assert.match(modern.description, SEND_RULES[0]);
+  // Свой текст человека — его решение: код правило поверх не дописывает.
+  const own = { ...CONFIG, tools: { ...CONFIG.tools, leave_message: { description: 'Own words.' } } };
+  assert.equal(buildTools({ config: own, context: CONTEXT }).find((t) => t.name === 'leave_message').description, 'Own words.');
+});
+
 // --- файловые тулзы -----------------------------------------------------------
 test('файловые тулзы отдают содержимое контекста', async () => {
   const profile = await tool('get_profile');

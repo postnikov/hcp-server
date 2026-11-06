@@ -31,6 +31,10 @@ const text = (body, isError = false) => ({ content: [{ type: 'text', text: body 
 
 const capitalize = (word) => word.charAt(0).toUpperCase() + word.slice(1);
 
+/** Письмо уходит живому человеку от чужого имени: сначала его видит тот, за кого пишет агент. */
+const SEND_RULE =
+  'Before calling it, show your human the final text and the contact exactly as they will be sent, and send only after they agree. Never invent a contact, send one message per request, and do not send it again after a success.';
+
 /**
  * Инструкции сервера: авторские из конфига, иначе собранные из того, что реально объявлено.
  * Сгенерированные не притворяются написанными человеком — они перечисляют факты.
@@ -50,8 +54,8 @@ export function buildInstructions({ config, readTools, hasAsk, docTools = [] }) 
   }
   lines.push(
     hasAsk
-      ? `Two tools do more than read. ask() answers a question that the files do not answer directly, synthesised strictly from the same pack. leave_message() delivers a message to the human — an invitation, a project, an introduction from your human.`
-      : `One tool does more than read: leave_message() delivers a message to the human — an invitation, a project, an introduction from your human. Nothing is published and nothing is auto-answered.`,
+      ? `Two tools do more than read. ask() answers a question that the files do not answer directly, synthesised strictly from the same pack. leave_message() delivers a message to the human — an invitation, a project, an introduction from your human. ${SEND_RULE}`
+      : `One tool does more than read: leave_message() delivers a message to the human — an invitation, a project, an introduction from your human. Nothing is published and nothing is auto-answered. ${SEND_RULE}`,
   );
   if (docTools?.length) {
     lines.push(
@@ -78,7 +82,25 @@ const getDocsDescription = ({ short, collection, listTool }) =>
 
 /** Описание `leave_message` по умолчанию. Тоже переопределяется в конфиге. */
 const messageDescription = ({ short }) =>
-  `Leave a message for ${short} personally — an invitation to speak, a request for work or consulting, a partnership proposal, a request to meet, or anything else. The message goes to a queue ${short} reads personally: nothing is published, nothing is auto-answered, and no reply comes back through this server. Give a contact your human can actually be reached at. If your human has a site or an MCP server of their own, put it in link. Limited to a few messages a day per client.`;
+  `Leave a message for ${short} personally — an invitation to speak, a request for work or consulting, a partnership proposal, a request to meet, or anything else. The message goes to a queue ${short} reads personally: nothing is published, nothing is auto-answered, and no reply comes back through this server. Give a contact your human can actually be reached at. If your human has a site or an MCP server of their own, put it in link. Before you call it, show your human the final message and the contact exactly as they will be sent, and call it only after they agree — ${short} should hear from your human, not from an agent acting on its own. Never invent a contact. One message per request; after a success, do not send it again. Limited to a few messages a day per client.`;
+
+/**
+ * Подсказки клиенту (MCP tool annotations) — где спросить человека перед вызовом. Без них
+ * клиент по спеке считает тулзу разрушительной записью (`readOnlyHint: false`,
+ * `destructiveHint: true`) и переспрашивает даже на чтении профиля. Значения честные по
+ * устройству тулзы; человек может переопределить любую подсказку в `config.json → tools`.
+ */
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const HINTS = {
+  /** Файлы контекста: чтение замкнутого пака, повтор отдаёт то же самое. */
+  file: READ_ONLY,
+  /** Документы читаются с чужого источника по URL — мир открытый, но это всё ещё чтение. */
+  documents: { ...READ_ONLY, openWorldHint: true },
+  /** `ask` тратит дневной бюджет и отвечает каждый раз по-разному; стирать ему нечего. */
+  ask: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  /** Письмо уходит живому человеку: повтор — второе письмо, а не то же самое. */
+  leave_message: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+};
 
 /**
  * Состав сервера на этот запуск: файловые тулзы из контекста, `ask` по флагу,
@@ -86,6 +108,11 @@ const messageDescription = ({ short }) =>
  */
 export function buildTools({ config, context }) {
   const describe = (name, fallback) => config.tools?.[name]?.description || fallback;
+  /** Человеческое имя тулзы и подсказки клиенту — дефолт из устройства тулзы, поверх — конфиг. */
+  const present = (name, title, hints) => ({
+    title: config.tools?.[name]?.title || title,
+    annotations: { ...hints, ...config.tools?.[name]?.annotations },
+  });
   /**
    * Описания параметров тоже говорят о человеке («English or Russian», «corporate AI
    * programs»), поэтому переопределяются оттуда же — `context/config.json`, ключ `params`.
@@ -101,6 +128,8 @@ export function buildTools({ config, context }) {
 
   const fileTools = context.tools.map((tool) => ({
     name: tool.name,
+    // title — из шапки файла (`title:` или первый заголовок): его пишет человек, а не код.
+    ...present(tool.name, tool.title, HINTS.file),
     description: describe(tool.name, tool.description),
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     slugs: tool.slugs,
@@ -113,6 +142,7 @@ export function buildTools({ config, context }) {
   if (config.ask.enabled) {
     tools.push({
       name: 'ask',
+      ...present('ask', `Ask about ${short}`, HINTS.ask),
       description: describe('ask', askDescription({ short, readTools })),
       inputSchema: withParams('ask', {
         type: 'object',
@@ -131,12 +161,14 @@ export function buildTools({ config, context }) {
     const { list, get } = toolNames(collection, spec);
     tools.push({
       name: list,
+      ...present(list, `List ${short}'s ${collection}`, HINTS.documents),
       description: describe(list, listDocsDescription({ short, collection, getTool: get })),
       inputSchema: withParams(list, { type: 'object', properties: {}, additionalProperties: false }),
       documents: { collection, mode: 'list' },
     });
     tools.push({
       name: get,
+      ...present(get, `Read one of ${short}'s ${collection}`, HINTS.documents),
       description: describe(get, getDocsDescription({ short, collection, listTool: list })),
       inputSchema: withParams(get, {
         type: 'object',
@@ -152,6 +184,7 @@ export function buildTools({ config, context }) {
 
   tools.push({
     name: 'leave_message',
+    ...present('leave_message', `Leave a message for ${short}`, HINTS.leave_message),
     description: describe('leave_message', messageDescription({ short })),
     inputSchema: withParams('leave_message', {
       type: 'object',
@@ -371,7 +404,19 @@ export function mountMcp(app, { clientIp, limited, json, fetchImpl, config, cont
   const noStream = (req, res) =>
     rpcError(res.set('Allow', 'POST'), 405, -32000, 'This server speaks Streamable HTTP over POST only.');
 
-  app.get('/mcp', noStream);
+  /**
+   * Обычный GET — человек открыл ссылку в браузере или агент сходил веб-фетчем по адресу из
+   * чата. Вместо ошибки — 302 на страницу сервера (`server.page`), если она есть.
+   * По Streamable HTTP GET от клиента — запрос SSE-потока: у него `Accept: text/event-stream`
+   * и/или MCP-заголовки. Такому — прежний 405, клиент должен видеть ровно то же, что раньше.
+   */
+  const fromMcpClient = (req) =>
+    /text\/event-stream/i.test(String(req.headers.accept || '')) ||
+    ['mcp-protocol-version', 'mcp-session-id', 'mcp-method', 'last-event-id'].some((name) => name in req.headers);
+
+  app.get('/mcp', (req, res) =>
+    config.server.page && !fromMcpClient(req) ? res.redirect(302, config.server.page) : noStream(req, res),
+  );
   app.delete('/mcp', noStream);
 
   app.post('/mcp', json, async (req, res) => {

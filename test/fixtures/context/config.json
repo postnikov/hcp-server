@@ -6,7 +6,7 @@
     "site": "https://rin.example",
     "pronouns": { "subject": "she", "object": "her", "possessive": "her" }
   },
-  "server": { "id": "rin", "connectAs": "rin", "version": "2.1.0", "url": "https://rin.example/mcp" },
+  "server": { "id": "rin", "connectAs": "rin", "version": "2.1.0", "url": "https://rin.example/mcp", "page": "https://rin.example/mcp.md" },
   "context": {
     "groups": {
       "get_profile": ["who", "now"],

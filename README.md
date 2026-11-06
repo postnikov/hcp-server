@@ -159,9 +159,9 @@ The file is optional — without it the server still runs, it just talks about
 | Key | What it sets |
 |---|---|
 | `person` | `name`, `short`, `headline`, `site`, `pronouns` — everything the server says about you that isn't a context file |
-| `server` | `id` (the name in the handshake), `connectAs` (the name in `claude mcp add`), `url` (your public `/mcp`), `instructions` (what an agent reads before its first call; empty = assembled from your `person` and the tools that actually exist) |
+| `server` | `id` (the name in the handshake), `connectAs` (the name in `claude mcp add`), `url` (your public `/mcp`), `instructions` (what an agent reads before its first call; empty = assembled from your `person` and the tools that actually exist), `page` (a page about the server: a plain browser GET of `/mcp` is redirected there with 302, MCP clients still get 405; empty = 405 for everyone) |
 | `context.groups` | the file → tool map, and the order tools appear in `tools/list`. A file not named here still ships, as `get_<filename>` |
-| `tools` | overrides the descriptions of `ask` and `leave_message`. File tools are described by `for_agent` in their own header, next to the content they describe |
+| `tools` | overrides the descriptions of `ask` and `leave_message`. File tools are described by `for_agent` in their own header, next to the content they describe. Also `tools.<name>.title` and `tools.<name>.annotations` — the name a client shows and the MCP hints (read-only, destructive, idempotent, open world). Every tool has honest defaults: files and documents read, `ask` and `leave_message` do not. Out of the box the description of `leave_message` and the assembled `instructions` tell an agent to show its human the final text and contact and to send only after they agree. Your own text replaces that wording, so keep the rule in it |
 | `documents` | collections fetched by URL — each one adds a list tool and a get-by-slug tool. Empty by default, so no tools |
 | `ask` | `enabled`, `model`, `maxTokens`, and the two daily ceilings |
 | `limits` | per-IP buckets: calls per minute, `ask` and `leave_message` per day |
