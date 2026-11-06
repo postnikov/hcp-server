@@ -53,7 +53,7 @@ src/lib.js        state on disk, budget cap, validation, Anthropic + notificatio
 src/discovery.js  server-card.json and llms.txt built from the config
 src/documents.js  documents fetched by URL: index and body cache, TTL, honest stale
 src/server.js     express, client IP behind a proxy, rate-limit buckets, startup
-test.js           node:test over test/fixtures/ — 63 tests, all network mocked
+test.js           node:test over test/fixtures/ — 64 tests, all network mocked
 data/             journal.jsonl, inbox.jsonl, budget.json (not in git)
 ```
 
@@ -127,7 +127,7 @@ redirect a real client. An empty `page` means 405 for everyone.
 ## Run and verify
 
 ```bash
-npm test                                          # 63 tests, network mocked
+npm test                                          # 64 tests, network mocked
 PORT=3999 DATA_DIR=/tmp/mcp node src/server.js    # local server on context/
 CONTEXT_DIR=test/fixtures/context-lite node src/server.js   # lite: one file
 ```
